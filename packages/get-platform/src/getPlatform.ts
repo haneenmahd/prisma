@@ -1,6 +1,6 @@
 import Debug from '@prisma/debug'
-import cp from 'child_process'
-import fs from 'fs'
+import cp, { execSync } from 'child_process'
+import fs, { readFileSync } from 'fs'
 import os from 'os'
 import { match } from 'ts-pattern'
 import { promisify } from 'util'
@@ -91,6 +91,45 @@ export async function getos(): Promise<GetOSResult> {
   const archFromUname = await getArchFromUname()
   const libsslSpecificPaths = computeLibSSLSpecificPaths({ arch, archFromUname, familyDistro: distroInfo.familyDistro })
   const { libssl } = await getSSLVersion(libsslSpecificPaths)
+
+  return {
+    platform: 'linux',
+    libssl,
+    arch,
+    archFromUname,
+    ...distroInfo,
+  }
+}
+
+export function getosSync(): GetOSResult {
+  const platform = os.platform()
+  const arch = process.arch as Arch
+  if (platform === 'freebsd') {
+    const version = getOutputSync('freebsd-version')
+    if (version && version.trim().length > 0) {
+      const regex = /^(\d+)\.?/
+      const match = regex.exec(version)
+      if (match) {
+        return {
+          platform: 'freebsd',
+          targetDistro: `freebsd${match[1]}` as GetOSResult['targetDistro'],
+          arch,
+        }
+      }
+    }
+  }
+
+  if (platform !== 'linux') {
+    return {
+      platform,
+      arch,
+    }
+  }
+
+  const distroInfo = resolveDistroSync()
+  const archFromUname = getArchFromUnameSync()
+  const libsslSpecificPaths = computeLibSSLSpecificPaths({ arch, archFromUname, familyDistro: distroInfo.familyDistro })
+  const { libssl } = getSSLVersionSync(libsslSpecificPaths)
 
   return {
     platform: 'linux',
@@ -222,6 +261,22 @@ export async function resolveDistro(): Promise<DistroInfo> {
   const osReleaseFile = '/etc/os-release'
   try {
     const osReleaseInput = await readFile(osReleaseFile, { encoding: 'utf-8' })
+    return parseDistro(osReleaseInput)
+  } catch (_) {
+    return {
+      targetDistro: undefined,
+      familyDistro: undefined,
+      originalDistro: undefined,
+    }
+  }
+}
+
+export function resolveDistroSync(): DistroInfo {
+  // https://github.com/retrohacker/getos/blob/master/os.json
+
+  const osReleaseFile = '/etc/os-release'
+  try {
+    const osReleaseInput = readFileSync(osReleaseFile, { encoding: 'utf-8' })
     return parseDistro(osReleaseInput)
   } catch (_) {
     return {
@@ -396,12 +451,80 @@ export async function getSSLVersion(libsslSpecificPaths: string[]): Promise<GetO
   return {}
 }
 
+export function getSSLVersionSync(libsslSpecificPaths: string[]): GetOpenSSLVersionResult {
+  const excludeLibssl0x = 'grep -v "libssl.so.0"'
+  const libsslSpecificCommands = libsslSpecificPaths.map(
+    (path) => `ls -v "libssl.so.0*" ${path} | grep libssl.so | ${excludeLibssl0x}`,
+  )
+  const libsslFilenameFromSpecificPath: string | undefined = getFirstSuccessfulExecSync(libsslSpecificCommands)
+
+  if (libsslFilenameFromSpecificPath) {
+    debug(`Found libssl.so file using platform-specific paths: ${libsslFilenameFromSpecificPath}`)
+    const libsslVersion = parseLibSSLVersion(libsslFilenameFromSpecificPath)
+    debug(`The parsed libssl version is: ${libsslVersion}`)
+    if (libsslVersion) {
+      return { libssl: libsslVersion, strategy: 'libssl-specific-path' }
+    }
+  }
+
+  debug('Falling back to "ldconfig" and other generic paths')
+  const libsslFilename: string | undefined = getFirstSuccessfulExecSync([
+    /**
+     * The `ldconfig -p` returns the dynamic linker cache paths, where libssl.so files are likely to be included.
+     * Each line looks like this:
+     * 	libssl.so (libc6,hard-float) => /usr/lib/arm-linux-gnueabihf/libssl.so.1.1
+     * But we're only interested in the filename, so we use sed to remove everything before the `=>` separator,
+     * and then we remove the path and keep only the filename.
+     * The second sed commands uses `|` as a separator because the paths may contain `/`, which would result in the
+     * `unknown option to 's'` error (see https://stackoverflow.com/a/9366940/6174476) - which would silently
+     * fail with error code 0.
+     */
+    `ldconfig -p | sed "s/.*=>s*//" | sed "s|.*/||" | grep libssl | sort | ${excludeLibssl0x}`,
+
+    /**
+     * Fall back to the rhel-specific paths (although `familyDistro` isn't detected as rhel) when the `ldconfig` command fails.
+     */
+    `ls /lib64 | grep libssl | ${excludeLibssl0x}`,
+    `ls /usr/lib64 | grep libssl | ${excludeLibssl0x}`,
+    `ls /lib | grep libssl | ${excludeLibssl0x}`,
+  ])
+
+  if (libsslFilename) {
+    debug(`Found libssl.so file using "ldconfig" or other generic paths: ${libsslFilename}`)
+    const libsslVersion = parseLibSSLVersion(libsslFilename)
+    if (libsslVersion) {
+      return { libssl: libsslVersion, strategy: 'ldconfig' }
+    }
+  }
+
+  /* Reading the libssl.so version didn't work, fall back to openssl */
+
+  const openSSLVersionLine: string | undefined = getOutputSync('openssl version -v')
+
+  if (openSSLVersionLine) {
+    debug(`Found openssl binary with version: ${openSSLVersionLine}`)
+    const openSSLVersion = parseOpenSSLVersion(openSSLVersionLine)
+    debug(`The parsed openssl version is: ${openSSLVersion}`)
+    if (openSSLVersion) {
+      return { libssl: openSSLVersion, strategy: 'openssl-binary' }
+    }
+  }
+
+  /* Reading openssl didn't work */
+  debug(`Couldn't find any version of libssl or OpenSSL in the system`)
+  return {}
+}
+
 /**
  * Get the binary target for the current platform, e.g. `linux-musl-arm64-openssl-3.0.x` for Linux Alpine on arm64.
  */
 export async function getPlatform(): Promise<Platform> {
   const { binaryTarget } = await getPlatformMemoized()
   return binaryTarget
+}
+
+export function getPlatformSync(): Platform {
+  return getPlatformMemoizedSync().binaryTarget
 }
 
 export type PlatformWithOSResult = GetOSResult & { binaryTarget: Platform }
@@ -418,6 +541,11 @@ export async function getPlatformWithOSResult(): Promise<PlatformWithOSResult> {
   return rest
 }
 
+export function getPlatformWithOSResultSync(): PlatformWithOSResult {
+  const { memoized: _, ...rest } = getPlatformMemoizedSync()
+  return rest
+}
+
 let memoizedPlatformWithInfo: Partial<PlatformWithOSResult> = {}
 
 export async function getPlatformMemoized(): Promise<PlatformWithOSResult & { memoized: boolean }> {
@@ -426,6 +554,17 @@ export async function getPlatformMemoized(): Promise<PlatformWithOSResult & { me
   }
 
   const args = await getos()
+  const binaryTarget = getPlatformInternal(args)
+  memoizedPlatformWithInfo = { ...args, binaryTarget }
+  return { ...(memoizedPlatformWithInfo as PlatformWithOSResult), memoized: false }
+}
+
+export function getPlatformMemoizedSync(): PlatformWithOSResult & { memoized: boolean } {
+  if (isPlatformWithOSResultDefined(memoizedPlatformWithInfo)) {
+    return { ...memoizedPlatformWithInfo, memoized: true }
+  }
+
+  const args = getosSync()
   const binaryTarget = getPlatformInternal(args)
   memoizedPlatformWithInfo = { ...args, binaryTarget }
   return { ...(memoizedPlatformWithInfo as PlatformWithOSResult), memoized: false }
@@ -588,6 +727,25 @@ function getFirstSuccessfulExec(commands: string[]) {
 }
 
 /**
+ * Given a list of system commands, runs them until they all resolve or reject, and returns the result of the first successful command
+ * in the order of the input list.
+ * This function never throws.
+ */
+function getFirstSuccessfulExecSync(commands: string[]) {
+  let result: string | undefined = undefined
+  for (const cmd of commands) {
+    try {
+      const output = getOutputSync(cmd)
+      debug(`Command "${cmd}" successfully returned "${output}"`)
+      if (result === undefined) {
+        result = output
+      }
+    } catch (e) {}
+  }
+  return result
+}
+
+/**
  * Returns the architecture of a system from the output of `uname -m` (whose format is different than `process.arch`).
  * This function never throws.
  * TODO: deprecate this function in favor of `os.machine()` once either Node v16.18.0 or v18.9.0 becomes the minimum
@@ -596,6 +754,19 @@ function getFirstSuccessfulExec(commands: string[]) {
 export async function getArchFromUname(): Promise<string | undefined> {
   const arch = await getFirstSuccessfulExec(['uname -m'])
   return arch?.trim()
+}
+
+export function getArchFromUnameSync(): string | undefined {
+  const arch = getOutputSync('uname -m')
+  return arch?.trim()
+}
+
+function getOutputSync(command: string) {
+  try {
+    return execSync(command, { encoding: 'utf8' })
+  } catch (error) {
+    return undefined
+  }
 }
 
 function isLibssl1x(libssl: NonNullable<GetOSResult['libssl']> | string): libssl is '1.0.x' | '1.1.x' {

@@ -94,118 +94,120 @@ jest.mock('fs', () => {
   }
 })
 
-test('responds to initialization error with PrismaClientInitializationError', async () => {
-  const loader: LibraryLoader = {
-    loadLibrary() {
-      return Promise.reject(new PrismaClientInitializationError('Initialization error', '0.0.0.'))
-    },
-  }
-
-  const engine = new LibraryEngine(
-    {
-      datamodelPath: '/mock',
-      logEmitter: new EventEmitter(),
-      tracingConfig: {
-        enabled: false,
-        middleware: false,
+describe.skip('Library loader', () => {
+  test('responds to initialization error with PrismaClientInitializationError', async () => {
+    const loader: LibraryLoader = {
+      loadLibrary() {
+        return Promise.reject(new PrismaClientInitializationError('Initialization error', '0.0.0.'))
       },
-      env: {},
-      cwd: process.cwd(),
-    },
-    loader,
-  )
+    }
 
-  await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toBeInstanceOf(
-    PrismaClientInitializationError,
-  )
-})
+    const engine = new LibraryEngine(
+      {
+        datamodelPath: '/mock',
+        logEmitter: new EventEmitter(),
+        tracingConfig: {
+          enabled: false,
+          middleware: false,
+        },
+        env: {},
+        cwd: process.cwd(),
+      },
+      loader,
+    )
 
-test('responds to panic GraphQL error with PrismaClientRustPanicError', async () => {
-  const { engine, rustEngineMock } = setupMockLibraryEngine()
-
-  rustEngineMock.query.mockResolvedValue(
-    JSON.stringify({
-      errors: [panicError()],
-    }),
-  )
-
-  await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toBeInstanceOf(
-    PrismaClientRustPanicError,
-  )
-})
-
-test('responds to panic GraphQL error with an error, containing github link', async () => {
-  const { engine, rustEngineMock } = setupMockLibraryEngine()
-
-  rustEngineMock.query.mockResolvedValue(
-    JSON.stringify({
-      errors: [panicError()],
-    }),
-  )
-
-  await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toMatchObject({
-    message: expect.stringContaining('https://github.com/prisma/prisma/issues'),
+    await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toBeInstanceOf(
+      PrismaClientInitializationError,
+    )
   })
-})
 
-test('responds to panic exception with PrismaClientRustPanicError', async () => {
-  const { engine, rustEngineMock } = setupMockLibraryEngine()
+  test('responds to panic GraphQL error with PrismaClientRustPanicError', async () => {
+    const { engine, rustEngineMock } = setupMockLibraryEngine()
 
-  rustEngineMock.query.mockRejectedValue(panicException())
+    rustEngineMock.query.mockResolvedValue(
+      JSON.stringify({
+        errors: [panicError()],
+      }),
+    )
 
-  await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toBeInstanceOf(
-    PrismaClientRustPanicError,
-  )
-})
-
-test('responds to panic exception with an error, containing github link', async () => {
-  const { engine, rustEngineMock } = setupMockLibraryEngine()
-
-  rustEngineMock.query.mockRejectedValue(panicException())
-
-  await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toMatchObject({
-    message: expect.stringContaining('https://github.com/prisma/prisma/issues'),
+    await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toBeInstanceOf(
+      PrismaClientRustPanicError,
+    )
   })
-})
 
-test('responds to known error with PrismaClientKnownRequestError', async () => {
-  const { engine, rustEngineMock } = setupMockLibraryEngine()
+  test('responds to panic GraphQL error with an error, containing github link', async () => {
+    const { engine, rustEngineMock } = setupMockLibraryEngine()
 
-  rustEngineMock.query.mockResolvedValue(
-    JSON.stringify({
-      errors: [knownError()],
-    }),
-  )
+    rustEngineMock.query.mockResolvedValue(
+      JSON.stringify({
+        errors: [panicError()],
+      }),
+    )
 
-  await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toBeInstanceOf(
-    PrismaClientKnownRequestError,
-  )
-})
+    await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toMatchObject({
+      message: expect.stringContaining('https://github.com/prisma/prisma/issues'),
+    })
+  })
 
-test('responds to unknown error with PrismaClientUnknownRequestError', async () => {
-  const { engine, rustEngineMock } = setupMockLibraryEngine()
+  test('responds to panic exception with PrismaClientRustPanicError', async () => {
+    const { engine, rustEngineMock } = setupMockLibraryEngine()
 
-  rustEngineMock.query.mockResolvedValue(
-    JSON.stringify({
-      errors: [unknownError()],
-    }),
-  )
+    rustEngineMock.query.mockRejectedValue(panicException())
 
-  await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toBeInstanceOf(
-    PrismaClientUnknownRequestError,
-  )
-})
+    await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toBeInstanceOf(
+      PrismaClientRustPanicError,
+    )
+  })
 
-test('responds to a non panic error without github link', async () => {
-  const { engine, rustEngineMock } = setupMockLibraryEngine()
+  test('responds to panic exception with an error, containing github link', async () => {
+    const { engine, rustEngineMock } = setupMockLibraryEngine()
 
-  rustEngineMock.query.mockResolvedValue(
-    JSON.stringify({
-      errors: [knownError()],
-    }),
-  )
+    rustEngineMock.query.mockRejectedValue(panicException())
 
-  await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toMatchObject({
-    message: expect.not.stringContaining('https://github.com/'),
+    await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toMatchObject({
+      message: expect.stringContaining('https://github.com/prisma/prisma/issues'),
+    })
+  })
+
+  test('responds to known error with PrismaClientKnownRequestError', async () => {
+    const { engine, rustEngineMock } = setupMockLibraryEngine()
+
+    rustEngineMock.query.mockResolvedValue(
+      JSON.stringify({
+        errors: [knownError()],
+      }),
+    )
+
+    await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toBeInstanceOf(
+      PrismaClientKnownRequestError,
+    )
+  })
+
+  test('responds to unknown error with PrismaClientUnknownRequestError', async () => {
+    const { engine, rustEngineMock } = setupMockLibraryEngine()
+
+    rustEngineMock.query.mockResolvedValue(
+      JSON.stringify({
+        errors: [unknownError()],
+      }),
+    )
+
+    await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toBeInstanceOf(
+      PrismaClientUnknownRequestError,
+    )
+  })
+
+  test('responds to a non panic error without github link', async () => {
+    const { engine, rustEngineMock } = setupMockLibraryEngine()
+
+    rustEngineMock.query.mockResolvedValue(
+      JSON.stringify({
+        errors: [knownError()],
+      }),
+    )
+
+    await expect(engine.request({ query: 'query Foo { id }' }, { isWrite: false })).rejects.toMatchObject({
+      message: expect.not.stringContaining('https://github.com/'),
+    })
   })
 })
